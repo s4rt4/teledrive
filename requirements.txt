@@ -1,0 +1,5 @@
+telethon
+PyQt6
+qasync
+python-dotenv
+platformdirs

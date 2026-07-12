@@ -1,0 +1,16 @@
+# Kredensial & data sensitif — jangan pernah masuk repo
+.env
+*.session
+*.session-journal
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Packaging
+build/
+dist/
+*.spec
