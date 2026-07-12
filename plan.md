@@ -155,6 +155,42 @@ async def download_file(message_id, dest_path, progress_callback):
 | 3 | `db.py` schema final (termasuk `meta` + `channel_id` + UNIQUE constraint), migrasi hasil test Fase 2 ke DB, query search/list, `deleter.py` |
 | 4 | Integrasi PyQt6 + qasync: hubungkan semua modul ke UI, queue upload sekuensial, progress bar, delete flow |
 | 5 | Packaging PyInstaller (fase sendiri — biasanya butuh iterasi: hidden imports, data files, dll) |
+| 6 | App Android: reuse `core/` (bebas Qt) + UI baru KivyMD, build APK via Buildozer |
+
+## Fase 6 — TeleDrive Android
+
+### Keputusan Arsitektur
+- **Kivy + KivyMD + Telethon** via python-for-android/Buildozer — bukan
+  rewrite Flutter/TDLib. Alasan: `core/` (auth, uploader, downloader,
+  sync, db, hasher, channel, previewer, sharer, renamer) sudah bebas
+  dari PyQt6, bisa dipakai ulang hampir utuh. Yang ditulis ulang hanya
+  lapisan UI (PyQt6 → KivyMD, Material Design).
+- Repo yang sama, folder `mobile/` untuk UI Android + `buildozer.spec`;
+  `core/` dan `config/` di-share. Guard: `core/` DILARANG import Qt
+  (tetap murni Python + Telethon).
+- Satu akun bisa dipakai di desktop & Android sekaligus — session
+  Telethon terpisah per device, DB dibangun via **Sinkronkan** (fitur
+  recovery yang sudah ada; inilah kenapa sync dari channel penting).
+
+### Sub-fase
+| Sub | Deliverable |
+|---|---|
+| 6.1 | PoC headless: APK minimal (Buildozer di WSL2), Telethon connect + login OTP + list isi channel di Android |
+| 6.2 | Core jalan penuh: db/sync/uploader/downloader dengan progress; session+DB di app-private storage (`android_storage`), bukan `platformdirs` |
+| 6.3 | UI KivyMD: login, browser grid/list + thumbnail, search/filter, upload via SAF picker, download ke `Download/`, pratinjau gambar in-app (tipe lain via intent ke app eksternal) |
+| 6.4 | Integrasi Android: foreground service untuk upload/auto-backup + notifikasi progress, share-sheet "Kirim ke TeleDrive", polish + APK release |
+
+### Risiko & Mitigasi
+- **Buildozer butuh Linux** → build via WSL2 di PC ini; CI GitHub Actions
+  sebagai alternatif build ulang yang reproducible.
+- **Background limits Android (Doze)** → semua transfer lewat foreground
+  service dengan notifikasi; auto-backup dijalankan saat app dibuka +
+  WorkManager-style periodic, bukan watcher terus-menerus.
+- **FloodWait di jaringan seluler tidak stabil** → retry/backoff yang
+  sudah ada di uploader dipertahankan; queue persist jadi makin penting.
+- **Ukuran APK ±40–60 MB** (Python runtime + Kivy) → diterima untuk v1.
+- **Jalan buntu p4a/Telethon** → fallback plan: rewrite Flutter + TDLib
+  (effort jauh lebih besar, keputusan terpisah).
 
 ## Dependencies (`requirements.txt`)
 ```
