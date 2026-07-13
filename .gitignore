@@ -10,7 +10,6 @@ __pycache__/
 .venv/
 venv/
 
-# Packaging
+# Packaging (teledrive.spec ikut repo — resep build)
 build/
 dist/
-*.spec

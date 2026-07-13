@@ -3,15 +3,19 @@
 Session Telethon dan teledrive.db disimpan di user data dir, BUKAN di folder
 project — folder aplikasi bisa read-only setelah di-package PyInstaller.
 """
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from platformdirs import user_data_dir
 import os
 
-# .env dicari di root project (folder di atas config/)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+# Saat frozen (PyInstaller), source tree tidak ada — aset (teledrive.svg)
+# di-bundle ke sys._MEIPASS; saat dev, root project = folder di atas config/
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys._MEIPASS)
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 APP_NAME = "TeleDrive"
 
@@ -20,6 +24,12 @@ APP_NAME = "TeleDrive"
 # appauthor=False: tanpa ini Windows dapat path dobel (TeleDrive\TeleDrive)
 DATA_DIR = Path(user_data_dir(APP_NAME, appauthor=False))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# .env: DATA_DIR menang (satu-satunya lokasi saat sudah di-package),
+# root project sebagai fallback saat dev. load_dotenv tidak menimpa
+# variabel yang sudah ter-load, jadi urutan = prioritas.
+load_dotenv(DATA_DIR / ".env")
+load_dotenv(PROJECT_ROOT / ".env")
 
 SESSION_PATH = DATA_DIR / "teledrive"  # Telethon menambah .session sendiri
 DB_PATH = DATA_DIR / "teledrive.db"
@@ -50,7 +60,7 @@ def get_api_credentials() -> tuple[int, str]:
     if not api_id or not api_hash:
         raise ConfigError(
             "TELEGRAM_API_ID / TELEGRAM_API_HASH belum diisi. "
-            "Copy .env.example jadi .env lalu isi dari https://my.telegram.org/apps"
+            f"Buat file .env di {DATA_DIR} lalu isi dari https://my.telegram.org/apps"
         )
     if not api_id.isdigit():
         raise ConfigError("TELEGRAM_API_ID harus angka.")
