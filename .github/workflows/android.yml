@@ -22,8 +22,9 @@ jobs:
       - name: Dependensi sistem p4a
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool \
-            pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf automake \
+            libtool libtool-bin libltdl-dev m4 pkg-config zlib1g-dev \
+            libncurses-dev cmake libffi-dev libssl-dev
 
       # p4a masih paling stabil dengan Cython 0.29.x
       - name: Instal buildozer
