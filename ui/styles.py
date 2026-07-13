@@ -258,6 +258,16 @@ QMenu::separator { height: 1px; background: @border@; margin: 5px 10px; }
 #DangerButton:hover { background: @danger_hover@; }
 QCheckBox { background: transparent; spacing: 8px; }
 
+/* ---- halaman login ---- */
+#LoginSubtitle { color: @muted@; font-size: 10.5pt; background: transparent; }
+#InfoLabel { color: @muted@; font-size: 9pt; background: transparent; }
+#ErrorLabel {
+    color: @danger@;
+    font-size: 9pt;
+    font-weight: 600;
+    background: transparent;
+}
+
 /* ---- content ---- */
 #Content {
     background: @content_bg@;
