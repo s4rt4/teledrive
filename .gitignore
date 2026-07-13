@@ -13,3 +13,8 @@ venv/
 # Packaging (teledrive.spec ikut repo — resep build)
 build/
 dist/
+
+# Android (Buildozer)
+mobile/.buildozer/
+mobile/bin/
+mobile/apicreds.py

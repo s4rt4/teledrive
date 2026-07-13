@@ -1,0 +1,63 @@
+# Build APK Android di CI — alternatif reproducible dari WSL2 (plan Fase 6).
+# APK debug tersedia sebagai artifact "teledrive-apk" di halaman run.
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dependensi sistem p4a
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf libtool \
+            pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev automake
+
+      # p4a masih paling stabil dengan Cython 0.29.x
+      - name: Instal buildozer
+        run: pip install buildozer cython==0.29.36
+
+      # Opsional: tanam kredensial API ke APK dari repo secrets.
+      # Repo ini PUBLIK — artifact bisa diunduh siapa saja, jadi secrets
+      # sengaja belum diset; app meminta api_id/api_hash sekali di UI.
+      - name: Tulis apicreds.py (kalau secrets ada)
+        env:
+          API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          if [ -n "$API_ID" ] && [ -n "$API_HASH" ]; then
+            printf 'API_ID = %s\nAPI_HASH = "%s"\n' "$API_ID" "$API_HASH" > mobile/apicreds.py
+            echo "apicreds.py ditulis dari secrets"
+          else
+            echo "secrets tidak ada — app akan minta kredensial di UI"
+          fi
+
+      - name: Cache SDK/NDK Android
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            mobile/.buildozer
+          key: buildozer-${{ hashFiles('mobile/buildozer.spec') }}
+
+      - name: Build APK debug
+        working-directory: mobile
+        run: buildozer android debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teledrive-apk
+          path: mobile/bin/*.apk
+          if-no-files-found: error
