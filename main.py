@@ -9,6 +9,7 @@ import asyncio
 import sys
 
 import qasync
+from PyQt6.QtCore import QLockFile
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from config import settings
@@ -21,6 +22,18 @@ from ui.main_window import MainWindow
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("TeleDrive")
+
+    # Single instance: dua proses yang berbagi satu .session membuat
+    # Telegram mencabut auth key-nya (AuthKeyDuplicatedError) — login ulang
+    # paksa. QLockFile melepas lock otomatis saat proses mati/crash.
+    lock = QLockFile(str(settings.DATA_DIR / "teledrive.lock"))
+    if not lock.tryLock(100):
+        QMessageBox.warning(
+            None, "TeleDrive",
+            "TeleDrive sudah berjalan (cek system tray). "
+            "Dua instance bersamaan merusak session Telegram.",
+        )
+        return
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
