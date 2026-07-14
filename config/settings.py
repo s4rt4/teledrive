@@ -2,13 +2,24 @@
 
 Session Telethon dan teledrive.db disimpan di user data dir, BUKAN di folder
 project — folder aplikasi bisa read-only setelah di-package PyInstaller.
+
+Di Android (python-for-android) platformdirs & dotenv tidak dibundel ke
+APK: path data pakai storage privat app (env ANDROID_PRIVATE, diset p4a
+saat start), kredensial di-export ke env oleh mobile/main.py.
 """
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-from platformdirs import user_data_dir
 import os
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # Android
+    load_dotenv = None
+try:
+    from platformdirs import user_data_dir
+except ImportError:  # Android
+    user_data_dir = None
 
 # Saat frozen (PyInstaller), source tree tidak ada — aset (teledrive.svg)
 # di-bundle ke sys._MEIPASS; saat dev, root project = folder di atas config/
@@ -22,14 +33,20 @@ APP_NAME = "TeleDrive"
 # Semua data runtime di sini, misal di Windows:
 # C:\Users\<user>\AppData\Local\TeleDrive
 # appauthor=False: tanpa ini Windows dapat path dobel (TeleDrive\TeleDrive)
-DATA_DIR = Path(user_data_dir(APP_NAME, appauthor=False))
+# Di Android: storage privat app (/data/data/<pkg>/files) via ANDROID_PRIVATE
+_android_private = os.environ.get("ANDROID_PRIVATE")
+if _android_private:
+    DATA_DIR = Path(_android_private)
+else:
+    DATA_DIR = Path(user_data_dir(APP_NAME, appauthor=False))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # .env: DATA_DIR menang (satu-satunya lokasi saat sudah di-package),
 # root project sebagai fallback saat dev. load_dotenv tidak menimpa
 # variabel yang sudah ter-load, jadi urutan = prioritas.
-load_dotenv(DATA_DIR / ".env")
-load_dotenv(PROJECT_ROOT / ".env")
+if load_dotenv is not None:
+    load_dotenv(DATA_DIR / ".env")
+    load_dotenv(PROJECT_ROOT / ".env")
 
 SESSION_PATH = DATA_DIR / "teledrive"  # Telethon menambah .session sendiri
 DB_PATH = DATA_DIR / "teledrive.db"

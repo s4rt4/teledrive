@@ -7,6 +7,8 @@ on:
   push:
     paths:
       - "mobile/**"
+      - "core/**"
+      - "config/**"
       - ".github/workflows/android.yml"
 
 jobs:
@@ -24,7 +26,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git zip unzip openjdk-17-jdk autoconf automake \
             libtool libtool-bin libltdl-dev m4 pkg-config zlib1g-dev \
-            libncurses-dev cmake libffi-dev libssl-dev
+            libncurses-dev cmake libffi-dev libssl-dev librsvg2-bin
 
       # p4a masih paling stabil dengan Cython 0.29.x
       - name: Instal buildozer
@@ -44,6 +46,15 @@ jobs:
           else
             echo "secrets tidak ada — app akan minta kredensial di UI"
           fi
+
+      # core/ + config/ di-share dengan desktop — sumber tunggal di root
+      # repo, disalin ke source.dir buildozer saat build (gitignored)
+      - name: Salin core/ + config/ dan generate icon
+        run: |
+          rm -rf mobile/core mobile/config
+          cp -r core config mobile/
+          mkdir -p mobile/data
+          rsvg-convert -w 512 -h 512 teledrive.svg -o mobile/data/icon.png
 
       - name: Cache SDK/NDK Android
         uses: actions/cache@v4

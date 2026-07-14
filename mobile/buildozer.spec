@@ -1,18 +1,24 @@
-# Buildozer spec TeleDrive Android (PoC 6.1)
+# Buildozer spec TeleDrive Android (Fase 6.2 — reuse core/)
 # Build butuh Linux: GitHub Actions (.github/workflows/android.yml)
 # atau WSL2. Hasil: mobile/bin/*.apk
+# core/ + config/ + data/icon.png disiapkan CI ke folder ini (gitignored).
 
 [app]
 title = TeleDrive
 package.name = teledrive
 package.domain = com.s4rt4
-version = 0.1
+version = 0.2
 
 source.dir = .
 source.include_exts = py
 
-# Telethon murni Python; pyaes+rsa(+pyasn1) adalah dependensi crypto-nya
-requirements = python3,kivy,telethon,rsa,pyaes,pyasn1
+# Icon & presplash di-generate CI dari teledrive.svg (rsvg-convert)
+icon.filename = %(source.dir)s/data/icon.png
+presplash.filename = %(source.dir)s/data/icon.png
+
+# Telethon murni Python; pyaes+rsa(+pyasn1) adalah dependensi crypto-nya.
+# sqlite3 = recipe p4a agar modul sqlite3 Python tersedia (dipakai core.db)
+requirements = python3,kivy,telethon,rsa,pyaes,pyasn1,sqlite3
 
 orientation = portrait
 fullscreen = 0

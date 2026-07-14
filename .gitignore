@@ -18,3 +18,7 @@ dist/
 mobile/.buildozer/
 mobile/bin/
 mobile/apicreds.py
+# Disalin/di-generate CI dari root repo (android.yml) — bukan sumber
+mobile/core/
+mobile/config/
+mobile/data/
