@@ -33,9 +33,15 @@ APP_NAME = "TeleDrive"
 # Semua data runtime di sini, misal di Windows:
 # C:\Users\<user>\AppData\Local\TeleDrive
 # appauthor=False: tanpa ini Windows dapat path dobel (TeleDrive\TeleDrive)
-# Di Android: storage privat app (/data/data/<pkg>/files) via ANDROID_PRIVATE
+# Di Android: storage privat app (/data/data/<pkg>/files) via ANDROID_PRIVATE.
+# TELEDRIVE_DATA_DIR = override eksplisit (dipakai smoke test UI mobile
+# supaya tidak menyentuh session desktop — dua instance satu session =
+# AuthKeyDuplicated, auth key dicabut Telegram)
+_env_dir = os.environ.get("TELEDRIVE_DATA_DIR")
 _android_private = os.environ.get("ANDROID_PRIVATE")
-if _android_private:
+if _env_dir:
+    DATA_DIR = Path(_env_dir)
+elif _android_private:
     DATA_DIR = Path(_android_private)
 else:
     DATA_DIR = Path(user_data_dir(APP_NAME, appauthor=False))

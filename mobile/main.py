@@ -1,29 +1,29 @@
-"""TeleDrive Android — Fase 6.2: core/ dipakai penuh di Android.
+"""TeleDrive Android — Fase 6.3: UI KivyMD penuh (paritas desktop).
 
-Reuse core/ tanpa perubahan: auth (login via callback), channel (cache
-id di meta), db (SQLite), sync (recovery channel→DB), downloader
-(progress + verifikasi sha256). core/ dan config/ disalin CI ke folder
-ini saat build (.github/workflows/android.yml) — di repo sumbernya
-tetap satu, di root.
-
-Session, DB, dan hasil download di storage privat app: config.settings
-memakai env ANDROID_PRIVATE (diset python-for-android saat start).
+Reuse core/ tanpa perubahan (auth, channel, db, sync, uploader,
+downloader, previewer, thumbs, renamer, deleter). core/ dan config/
+disalin CI ke folder ini saat build (.github/workflows/android.yml) —
+sumbernya tetap satu di root repo.
 
 Kivy dan Telethon berbagi SATU event loop asyncio (async_run) — pola
-yang sama dengan qasync di desktop. Login memakai core.auth.login
-dengan callback async yang await asyncio.Future dari tombol (pola
-ui/login_dialog.py — JANGAN blokir loop dengan dialog modal).
+qasync di desktop. Login memakai core.auth.login dengan callback async
+yang await asyncio.Future dari tombol (pola ui/login_dialog.py — JANGAN
+blokir loop dengan dialog modal).
 
-Kredensial API: apicreds.py (ditulis CI dari repo secrets, tidak
-di-commit) atau diminta sekali di UI lalu disimpan creds.json di
-storage privat; keduanya di-export ke env supaya
-settings.get_api_credentials() jalan tanpa .env.
+Data (session/DB/cache) di storage privat app: config.settings membaca
+env ANDROID_PRIVATE (diset python-for-android saat start).
+
+Smoke test UI di PC (tanpa Telegram):
+  TELEDRIVE_UI_SMOKE=login|browser python mobile/main.py
+menyimpan screenshot lalu keluar — dipakai verifikasi layout sebelum
+build APK.
 """
 import asyncio
 import json
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -33,132 +33,196 @@ sys.path.insert(
     0, str(_HERE if (_HERE / "core").exists() else _HERE.parent)
 )
 
-from kivy.app import App
+_SMOKE = os.environ.get("TELEDRIVE_UI_SMOKE", "")
+if _SMOKE:
+    # Isolasi total dari data desktop: session yang sama dipakai dua
+    # instance = AuthKeyDuplicated (auth key dicabut Telegram!)
+    os.environ.setdefault(
+        "TELEDRIVE_DATA_DIR", tempfile.mkdtemp(prefix="td_smoke_")
+    )
+
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.label import Label
-from kivy.uix.progressbar import ProgressBar
-from kivy.uix.scrollview import ScrollView
-from kivy.uix.textinput import TextInput
+from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.screenmanager import NoTransition, ScreenManager
+from kivymd.app import MDApp
+from kivymd.uix.button import MDRaisedButton
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDLabel
+from kivymd.uix.screen import MDScreen
+from kivymd.uix.textfield import MDTextField
+from kivymd.toast import toast
+
+if _SMOKE:
+    Window.size = (400, 800)
 
 from config import settings
 from core import auth
 from core.channel import get_storage_channel
-from core.db import Database, FileRecord
-from core.downloader import IntegrityError, download_file
-from core.sync import sync_channel
+from core.db import Database
+
+from browser import BrowserScreen, PreviewScreen
 
 try:
     from apicreds import API_HASH, API_ID
 except ImportError:
     API_ID, API_HASH = 0, ""
 
-BG = (0.07, 0.08, 0.10, 1)
-CARD = (0.13, 0.15, 0.19, 1)
-TEXT = (0.92, 0.94, 0.97, 1)
-ACCENT = (0.15, 0.55, 0.91, 1)
+
+class LoginScreen(MDScreen):
+    """Kartu login bertahap: (api_id/api_hash sekali) → nomor → OTP → 2FA.
+    Input diserahkan lewat asyncio.Future — dipakai sebagai callback
+    core.auth.login."""
+
+    def __init__(self, app, **kwargs):
+        super().__init__(**kwargs)
+        self.app = app
+        self._fut = None
+        self._allow_empty = False
+
+        anchor = AnchorLayout(padding=dp(20))
+        self.card = MDCard(
+            orientation="vertical", padding=dp(24), spacing=dp(14),
+            size_hint=(0.94, None), adaptive_height=True,
+            radius=[dp(20)],
+        )
+
+        title = MDLabel(
+            text="TeleDrive", font_style="H4", halign="center",
+            size_hint_y=None, height=dp(48),
+        )
+        subtitle = MDLabel(
+            text="Penyimpanan pribadi di Telegram", halign="center",
+            theme_text_color="Secondary", font_style="Caption",
+            size_hint_y=None, height=dp(20),
+        )
+        self.status = MDLabel(
+            text="Menyiapkan…", halign="center",
+            theme_text_color="Secondary",
+            size_hint_y=None, height=dp(44),
+        )
+        self.in_api_id = MDTextField(
+            hint_text="api_id (my.telegram.org/apps)", input_filter="int"
+        )
+        self.in_api_hash = MDTextField(hint_text="api_hash")
+        self.field = MDTextField(
+            hint_text="Nomor telepon, mis. +628123456789"
+        )
+        self.btn = MDRaisedButton(
+            text="Lanjut", size_hint=(1, None), height=dp(48),
+            disabled=True,
+        )
+        self.btn.bind(on_release=self._submit)
+
+        for w in (title, subtitle, self.status, self.in_api_id,
+                  self.in_api_hash, self.field, self.btn):
+            self.card.add_widget(w)
+        anchor.add_widget(self.card)
+        self.add_widget(anchor)
+        self.hide_api_fields()  # default: tampil hanya kalau creds kosong
+
+    def show_api_fields(self):
+        if self.in_api_id.parent is None:
+            # sisip lagi di atas field utama (index dihitung dari akhir)
+            idx = self.card.children.index(self.field) + 1
+            self.card.add_widget(self.in_api_hash, index=idx)
+            self.card.add_widget(self.in_api_id, index=idx + 1)
+
+    def hide_api_fields(self):
+        for w in (self.in_api_id, self.in_api_hash):
+            if w.parent is not None:
+                self.card.remove_widget(w)
+
+    def read_api_fields(self) -> tuple[int, str]:
+        try:
+            api_id = int(self.in_api_id.text.strip())
+        except ValueError:
+            api_id = 0
+        return api_id, self.in_api_hash.text.strip()
+
+    def _submit(self, *_):
+        if self._fut is not None and not self._fut.done():
+            value = self.field.text.strip()
+            if value or self._allow_empty:
+                self._fut.set_result(value)
+
+    async def ask(
+        self, hint: str, btn_text: str = "Lanjut",
+        password: bool = False, allow_empty: bool = False,
+    ) -> str:
+        self.field.text = ""
+        self.field.hint_text = hint
+        self.field.password = password
+        self.btn.text = btn_text
+        self.btn.disabled = False
+        self._allow_empty = allow_empty
+        self._fut = asyncio.get_running_loop().create_future()
+        value = await self._fut
+        self._fut = None
+        self.btn.disabled = True
+        return value
 
 
-class TeleDriveApp(App):
+class TeleDriveApp(MDApp):
     title = "TeleDrive"
 
     def build(self):
-        Window.clearcolor = BG
+        self.theme_cls.theme_style = "Dark"
+        self.theme_cls.primary_palette = "Blue"
         self.client = None
         self.db = None
         self.channel = None
-        self._pending = None  # Future menunggu input tombol
+        self.me = None
         self._phone = ""
-        self._busy = False  # satu transfer pada satu waktu
 
-        root = BoxLayout(
-            orientation="vertical", padding=dp(16), spacing=dp(8)
-        )
+        self.sm = ScreenManager(transition=NoTransition())
+        self.login = LoginScreen(self, name="login")
+        self.browser = BrowserScreen(self, name="browser")
+        self.preview = PreviewScreen(self, name="preview")
+        for s in (self.login, self.browser, self.preview):
+            self.sm.add_widget(s)
 
-        self.status = Label(
-            text="Menyiapkan…", size_hint_y=None, height=dp(56),
-            color=TEXT, halign="center", valign="middle",
-        )
-        self.status.bind(
-            size=lambda w, s: setattr(w, "text_size", (s[0], s[1]))
-        )
-        root.add_widget(self.status)
-
-        self.progress = ProgressBar(
-            max=1, value=0, size_hint_y=None, height=dp(6), opacity=0
-        )
-        root.add_widget(self.progress)
-
-        self.in_api_id = self._input(
-            "api_id (my.telegram.org/apps)", input_filter="int"
-        )
-        self.in_api_hash = self._input("api_hash")
-        self.in_value = self._input("Nomor telepon, mis. +628123456789")
-        for w in (self.in_api_id, self.in_api_hash, self.in_value):
-            root.add_widget(w)
-
-        self.btn = Button(
-            text="Lanjut", size_hint_y=None, height=dp(52),
-            background_normal="", background_color=ACCENT, color=TEXT,
-        )
-        self.btn._full_height = dp(52)
-        self.btn.bind(on_release=self._on_button)
-        root.add_widget(self.btn)
-
-        self.btn_sync = Button(
-            text="Sinkronkan", size_hint_y=None, height=dp(52),
-            background_normal="", background_color=ACCENT, color=TEXT,
-        )
-        self.btn_sync._full_height = dp(52)
-        self.btn_sync.bind(
-            on_release=lambda *_: asyncio.create_task(self._sync())
-        )
-        self._hide(self.btn_sync)
-        root.add_widget(self.btn_sync)
-
-        self.filebox = BoxLayout(
-            orientation="vertical", size_hint_y=None, spacing=dp(4)
-        )
-        self.filebox.bind(
-            minimum_height=lambda w, h: setattr(w, "height", h)
-        )
-        scroll = ScrollView()
-        scroll.add_widget(self.filebox)
-        root.add_widget(scroll)
-
-        return root
-
-    @staticmethod
-    def _input(hint: str, **kwargs) -> TextInput:
-        w = TextInput(
-            hint_text=hint, multiline=False, size_hint_y=None,
-            height=dp(48), **kwargs
-        )
-        w._full_height = dp(48)
-        return w
-
-    @staticmethod
-    def _hide(w):
-        w.opacity = 0
-        w.disabled = True
-        w.height = 0
-
-    @staticmethod
-    def _show(w):
-        w.opacity = 1
-        w.disabled = False
-        w.height = w._full_height
+        Window.bind(on_keyboard=self._on_key)
+        return self.sm
 
     def on_start(self):
-        asyncio.create_task(self._bootstrap())
+        if _SMOKE:
+            self._smoke(_SMOKE)
+            return
+        self.run_task(self._bootstrap())
+
+    def on_pause(self):
+        return True  # jangan dibunuh saat pindah app — transfer lanjut
+
+    def _on_key(self, window, key, *args):
+        if key == 27:  # tombol back Android / Esc
+            if self.sm.current == "preview":
+                self.sm.current = "browser"
+                return True
+            if self.sm.current == "browser":
+                return self.browser.handle_back()
+        return False
+
+    # ---- util task ----
+
+    def run_task(self, coro):
+        return asyncio.create_task(self._guarded(coro))
+
+    async def _guarded(self, coro):
+        try:
+            await coro
+        except Exception as e:
+            try:
+                toast(f"{type(e).__name__}: {e}")
+            except Exception:
+                pass
 
     # ---- kredensial & data ----
 
     def _migrate_poc_data(self):
-        """Session + creds dari PoC 6.1 (Kivy user_data_dir) pindah ke
-        settings.DATA_DIR kalau lokasinya beda — supaya tidak login ulang."""
+        """Session/creds dari PoC 6.1 (Kivy user_data_dir) → DATA_DIR
+        kalau lokasinya beda, supaya tidak perlu login ulang."""
         try:
             old = Path(self.user_data_dir)
         except Exception:
@@ -190,196 +254,118 @@ class TeleDriveApp(App):
         with open(self._creds_path(), "w", encoding="utf-8") as f:
             json.dump({"api_id": api_id, "api_hash": api_hash}, f)
 
-    # ---- input via Future (callback async untuk core.auth.login) ----
-
-    def _on_button(self, *_):
-        if self._pending is not None and not self._pending.done():
-            value = self.in_value.text.strip()
-            if value:
-                self._pending.set_result(value)
-
-    async def _ask_input(
-        self, hint: str, btn_text: str = "Lanjut", password: bool = False
-    ) -> str:
-        self.in_value.text = ""
-        self.in_value.hint_text = hint
-        self.in_value.password = password
-        self.btn.text = btn_text
-        self._show(self.in_value)
-        self._show(self.btn)
-        self._pending = asyncio.get_running_loop().create_future()
-        value = await self._pending
-        self._pending = None
-        self.btn.disabled = True
-        return value
+    # ---- callback login (dipakai core.auth.login) ----
 
     async def _ask_phone(self) -> str:
         if self._phone:
             return self._phone
-        return await self._ask_input(
+        return await self.login.ask(
             "Nomor telepon, mis. +628123456789", "Kirim Kode"
         )
 
     async def _ask_code(self) -> str:
-        self.status.text = "Kode dikirim ke app Telegram Anda"
-        return await self._ask_input("Kode OTP (cek app Telegram)", "Masuk")
+        self.login.status.text = "Kode dikirim ke app Telegram Anda"
+        return await self.login.ask("Kode OTP (cek app Telegram)", "Masuk")
 
     async def _ask_password(self) -> str:
-        self.status.text = "Akun dilindungi verifikasi 2 langkah"
-        return await self._ask_input("Password 2FA", "Masuk", password=True)
+        self.login.status.text = "Akun dilindungi verifikasi 2 langkah"
+        return await self.login.ask("Password 2FA", "Masuk", password=True)
 
     # ---- flow ----
 
     async def _bootstrap(self):
+        login = self.login
         self._migrate_poc_data()
         api_id, api_hash = self._load_creds()
 
         if not api_id:
-            self.status.text = (
-                "Login pertama: isi kredensial API dari my.telegram.org/apps"
+            login.show_api_fields()
+            login.status.text = (
+                "Login pertama — isi kredensial API dari my.telegram.org/apps"
             )
-            self._show(self.in_api_id)
-            self._show(self.in_api_hash)
             while True:
-                phone = await self._ask_input(
+                phone = await login.ask(
                     "Nomor telepon, mis. +628123456789", "Kirim Kode"
                 )
-                try:
-                    api_id = int(self.in_api_id.text.strip())
-                except ValueError:
-                    api_id = 0
-                api_hash = self.in_api_hash.text.strip()
+                api_id, api_hash = login.read_api_fields()
                 if api_id and api_hash:
                     break
-                self.status.text = "Isi api_id & api_hash dulu"
+                login.status.text = "Isi api_id & api_hash dulu"
             self._save_creds(api_id, api_hash)
             self._phone = phone
-        self._hide(self.in_api_id)
-        self._hide(self.in_api_hash)
+            login.hide_api_fields()
 
-        # settings.get_api_credentials() membaca env — tanpa .env di Android
+        # settings.get_api_credentials() membaca env — pengganti .env
         os.environ["TELEGRAM_API_ID"] = str(api_id)
         os.environ["TELEGRAM_API_HASH"] = api_hash
 
-        try:
-            self.client = auth.create_client()
-            self.status.text = "Menghubungi Telegram…"
-            await auth.login(
-                self.client,
-                self._ask_phone,
-                self._ask_code,
-                self._ask_password,
-            )
-        except Exception as e:
-            self.status.text = f"{type(e).__name__}: {e}"
-            self._show(self.btn)
-            return
+        while True:
+            try:
+                if self.client is None:
+                    self.client = auth.create_client()
+                login.status.text = "Menghubungi Telegram…"
+                await auth.login(
+                    self.client, self._ask_phone,
+                    self._ask_code, self._ask_password,
+                )
+                break
+            except Exception as e:
+                self._phone = ""  # jangan ulangi nomor yang gagal
+                login.status.text = f"{type(e).__name__}: {e}"
+                await login.ask(
+                    "(ketuk untuk coba lagi)", "Coba Lagi", allow_empty=True
+                )
 
-        self._hide(self.in_value)
-        self._hide(self.btn)
-        await self._main_flow()
-
-    async def _main_flow(self):
-        me = await self.client.get_me()
-        name = me.first_name or me.username or "?"
-        self.status.text = f"Masuk sebagai {name} — mencari channel…"
+        login.status.text = "Menyiapkan…"
+        self.me = await self.client.get_me()
+        if getattr(self.me, "premium", False):
+            # akun Premium: limit upload Telegram 4 GB — pakai 3,5 GB aman
+            settings.MAX_UPLOAD_SIZE = int(3.5 * 1024**3)
         self.db = Database()
         self.channel = await get_storage_channel(self.client, self.db)
-        self._show(self.btn_sync)
-        await self._sync()
+        self.sm.current = "browser"
+        self.browser.start()
 
-    async def _sync(self):
-        if self._busy:
-            return
-        self._busy = True
-        self.btn_sync.disabled = True
-        self.status.text = "Sinkronisasi…"
+    # ---- smoke test UI (tanpa Telegram, data dummy) ----
 
-        def prog(n: int):
-            if n % 25 == 0:
-                self.status.text = f"Sinkronisasi… {n} message dipindai"
+    def _smoke(self, mode: str):
+        def to_browser(*_):
+            self.db = Database()
+            fid = self.db.create_folder("Dokumen")
+            self.db.create_folder("Foto Liburan")
+            demo = [
+                ("Laporan Q2.pdf", "application/pdf", 2_400_000, None),
+                ("Screenshot_16.jpg", "image/jpeg", 340_000, None),
+                ("Backup proyek.zip", "application/zip", 88_000_000, None),
+                ("catatan.txt", "text/plain", 4_200, None),
+                ("video demo.mp4", "video/mp4", 154_000_000, fid),
+            ]
+            for i, (nm, mime, size, folder) in enumerate(demo, start=1):
+                rid = self.db.add_file(
+                    original_name=nm, channel_id=-100_1, message_id=i,
+                    size_bytes=size, mime_type=mime,
+                )
+                self.db.move_file(rid, folder)
+            self.sm.current = "browser"
+            self.browser.start()
 
-        try:
-            report = await sync_channel(
-                self.client, self.channel, self.db, progress=prog
-            )
-        except Exception as e:
-            self.status.text = f"{type(e).__name__}: {e}"
-            return
-        finally:
-            self._busy = False
-            self.btn_sync.disabled = False
-
-        self._refresh_list()
-        total_mb = self.db.total_synced_bytes() / 1024**2
-        self.status.text = (
-            f"{report.summary()} — total {total_mb:.0f} MB tersinkron"
+        if mode == "browser":
+            # switch setelah frame pertama — meniru flow login sungguhan
+            Clock.schedule_once(to_browser, 1)
+        shot = os.environ.get(
+            "TELEDRIVE_UI_SHOT", f"smoke_{mode}.png"
         )
 
-    def _refresh_list(self):
-        self.filebox.clear_widgets()
-        for rec in self.db.list_files():
-            if rec.status != "synced":
-                continue
-            size_mb = (rec.size_bytes or 0) / 1024**2
-            btn = Button(
-                text=f"{rec.original_name}  —  {size_mb:.1f} MB",
-                size_hint_y=None, height=dp(52),
-                background_normal="", background_color=CARD, color=TEXT,
-                halign="left", valign="middle",
-                shorten=True, shorten_from="right",
-            )
-            btn.bind(
-                size=lambda b, s: setattr(
-                    b, "text_size", (s[0] - dp(16), s[1])
-                )
-            )
-            btn.bind(
-                on_release=lambda b, r=rec: asyncio.create_task(
-                    self._download(r)
-                )
-            )
-            self.filebox.add_widget(btn)
+        def snap(*_):
+            # glReadPixels membaca back buffer — untuk scene statis isinya
+            # frame basi; render dulu frame segar tanpa flip
+            Window.dispatch("on_draw")
+            Window.screenshot(name=shot)
 
-    async def _download(self, rec: FileRecord):
-        """Unduh ke storage privat app dengan progress + verifikasi sha256.
-        Simpan ke Download/ publik (SAF) menyusul di 6.3."""
-        if self._busy:
-            return
-        self._busy = True
-        dest_dir = settings.DATA_DIR / "downloads"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        self.progress.value = 0
-        self.progress.max = rec.size_bytes or 1
-        self.progress.opacity = 1
-        self.status.text = f"Mengunduh {rec.original_name}…"
-
-        def prog(cur: int, total: int):
-            self.progress.max = total or 1
-            self.progress.value = cur
-
-        try:
-            path = await download_file(
-                self.client,
-                self.channel,
-                rec.message_id,
-                dest_dir / rec.original_name,
-                progress_callback=prog,
-                expected_sha256=rec.sha256,
-            )
-        except IntegrityError:
-            self.db.set_status(rec.id, "corrupt")
-            self.status.text = f"File corrupt: {rec.original_name}"
-            self._refresh_list()
-            return
-        except Exception as e:
-            self.status.text = f"{type(e).__name__}: {e}"
-            return
-        finally:
-            self.progress.opacity = 0
-            self._busy = False
-
-        self.status.text = f"Tersimpan: {path}"
+        # Di async mode Windows, tick interval Kivy (transisi screen)
+        # jalan sangat jarang — beri waktu longgar sebelum capture
+        Clock.schedule_once(snap, 8)
+        Clock.schedule_once(lambda *_: self.stop(), 9)
 
 
 if __name__ == "__main__":
