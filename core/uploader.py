@@ -53,6 +53,7 @@ async def upload_file(
     path: str | Path,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     find_by_sha256: Optional[Callable[[str], Optional[UploadResult]]] = None,
+    caption: Optional[str] = None,
 ) -> UploadResult:
     path = str(path)
     size = os.path.getsize(path)
@@ -70,6 +71,7 @@ async def upload_file(
             msg = await client.send_file(
                 channel,
                 path,
+                caption=caption,  # nama+folder (core.captions) — kontrak resync
                 progress_callback=progress_callback,
                 force_document=True,  # preserve original, tanpa re-encode
             )

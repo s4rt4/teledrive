@@ -7,7 +7,7 @@
 title = TeleDrive
 package.name = teledrive
 package.domain = com.s4rt4
-version = 0.3
+version = 0.4
 
 source.dir = .
 source.include_exts = py

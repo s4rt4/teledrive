@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
 
 from config import settings
 from core import (
+    captions,
     downloader,
     previewer,
     renamer,
@@ -784,8 +785,20 @@ class MainWindow(QMainWindow):
             target = None
         else:
             target = next(f.id for f in folders if paths[f.id] == choice)
-        for rec in records:
-            self.db.move_file(rec.id, target)
+        asyncio.create_task(self._move_records(records, target))
+
+    async def _move_records(
+        self, records: list[FileRecord], target: int | None
+    ) -> None:
+        """Pindah + publikasikan folder ke caption (sinkron antar
+        perangkat) — butuh jaringan, makanya async."""
+        try:
+            for rec in records:
+                await renamer.move_file(
+                    self.client, self.channel, self.db, rec, target
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Pindahkan gagal", str(e))
         self.refresh()
 
     @staticmethod
@@ -846,7 +859,17 @@ class MainWindow(QMainWindow):
                 self.client, self.channel, self.db,
                 progress=lambda n: row.set_status(f"{n} message"),
             )
-            QMessageBox.information(self, "Sinkronisasi", report.summary())
+            # migrasi satu kali: folder desktop lama diterbitkan ke caption
+            # supaya perangkat lain (Android) bisa merekonstruksinya
+            row.set_status("Publikasi folder…")
+            published = await sync.publish_folders(
+                self.client, self.channel, self.db,
+                progress=lambda n: row.set_status(f"Publikasi folder… {n}"),
+            )
+            text = report.summary()
+            if published:
+                text += f". {published} caption folder dipublikasikan"
+            QMessageBox.information(self, "Sinkronisasi", text)
         except asyncio.CancelledError:
             self._info("Sinkronisasi dibatalkan")
         except Exception as e:
@@ -997,6 +1020,10 @@ class MainWindow(QMainWindow):
                         self.client, self.channel, item.local_path,
                         progress_callback=row.set_progress,
                         find_by_sha256=self.db.find_by_sha256,
+                        # nama+folder ke caption — kontrak resync antar device
+                        caption=captions.build(
+                            name, self.db.folder_path(item.folder_id)
+                        ),
                     )
                     if result.deduped:
                         row.finish("Sudah ada (dedup)")

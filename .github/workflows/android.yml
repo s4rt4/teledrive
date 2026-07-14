@@ -55,10 +55,12 @@ jobs:
           cp -r core config mobile/
           mkdir -p mobile/data
           rsvg-convert -w 512 -h 512 teledrive.svg -o mobile/data/icon.png
-          # Adaptive icon: logo 300px di kanvas 512 transparan — safe zone
-          # launcher = 66% tengah; tanpa margin ini logo terpotong lingkaran
-          rsvg-convert -w 300 -h 300 teledrive.svg -o /tmp/logo300.png
-          convert /tmp/logo300.png -background none -gravity center \
+          # Adaptive icon: safe zone launcher = LINGKARAN diameter 66%
+          # (338px di kanvas 512). Logo persegi harus muat DI DALAM
+          # lingkaran itu: sisi maks = 338/√2 ≈ 239px — pakai 220px
+          # (300px kemarin masih terpotong sudutnya)
+          rsvg-convert -w 220 -h 220 teledrive.svg -o /tmp/logofg.png
+          convert /tmp/logofg.png -background none -gravity center \
             -extent 512x512 mobile/data/icon_fg.png
           convert -size 512x512 xc:"#101720" mobile/data/icon_bg.png
 

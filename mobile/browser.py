@@ -40,11 +40,11 @@ from kivymd.uix.toolbar import MDTopAppBar
 
 import androidio
 from config import settings
-from core import previewer
+from core import captions, previewer
 from core.db import FileRecord
 from core.deleter import delete_file
 from core.downloader import IntegrityError
-from core.renamer import rename_file
+from core.renamer import move_file, rename_file
 from core.sync import sync_channel
 from core.thumbs import fetch_thumbs, thumb_path
 from core.uploader import FileTooLargeError, upload_file
@@ -446,6 +446,9 @@ class BrowserScreen(MDScreen):
                         res = await upload_file(
                             self.app.client, self.app.channel, p,
                             self._progress, db.find_by_sha256,
+                            caption=captions.build(
+                                p.name, db.folder_path(item.folder_id)
+                            ),
                         )
                     except FileTooLargeError as e:
                         toast(str(e))
@@ -507,16 +510,19 @@ class BrowserScreen(MDScreen):
 
     def move_dialog(self, rec):
         options = [("home", "(Root)",
-                    lambda: self._move(rec, None))]
+                    lambda: self.app.run_task(self._move(rec, None)))]
         for f in self.app.db.list_all_folders():
             options.append((
                 "folder", f.name,
-                lambda fid=f.id: self._move(rec, fid),
+                lambda fid=f.id: self.app.run_task(self._move(rec, fid)),
             ))
         self._menu("Pindahkan ke…", options)
 
-    def _move(self, rec, folder_id):
-        self.app.db.move_file(rec.id, folder_id)
+    async def _move(self, rec, folder_id):
+        # tulis juga ke caption — perangkat lain ikut memindahkan saat sync
+        await move_file(
+            self.app.client, self.app.channel, self.app.db, rec, folder_id
+        )
         self.refresh()
         toast("Dipindahkan")
 

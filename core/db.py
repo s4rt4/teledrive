@@ -265,6 +265,35 @@ class Database:
             )
         return [_to_folder(r) for r in rows]
 
+    def folder_path(self, folder_id: int | None) -> Optional[str]:
+        """Path folder "A/B/C" untuk caption (core.captions); None = root."""
+        if folder_id is None:
+            return None
+        parts: list[str] = []
+        fid, seen = folder_id, set()
+        while fid is not None and fid not in seen:
+            seen.add(fid)
+            row = self.conn.execute(
+                "SELECT name, parent_id FROM folders WHERE id = ?", (fid,)
+            ).fetchone()
+            if row is None:
+                break
+            parts.append(row["name"])
+            fid = row["parent_id"]
+        return "/".join(reversed(parts)) or None
+
+    def ensure_folder_path(self, path: Optional[str]) -> Optional[int]:
+        """Buat (kalau perlu) rantai folder dari path caption; return id
+        folder terdalam. None/"/" = root."""
+        if not path or path.strip() in ("", "/"):
+            return None
+        fid: Optional[int] = None
+        for part in path.split("/"):
+            part = part.strip()
+            if part:
+                fid = self.get_or_create_folder(part, fid)
+        return fid
+
     def get_or_create_folder(self, name: str,
                              parent_id: int | None = None) -> int:
         for f in self.list_folders(parent_id):
