@@ -7,7 +7,7 @@
 title = TeleDrive
 package.name = teledrive
 package.domain = com.s4rt4
-version = 0.4
+version = 0.5
 
 source.dir = .
 source.include_exts = py
@@ -34,6 +34,8 @@ fullscreen = 0
 android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.api = 34
 android.minapi = 24
+# build release menghasilkan APK (default buildozer baru = AAB)
+android.release_artifact = apk
 # Satu arch dulu — build lebih cepat; tambah armeabi-v7a saat rilis
 android.archs = arm64-v8a
 # File .session = akses penuh akun Telegram; jangan ikut backup Android

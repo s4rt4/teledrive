@@ -89,11 +89,22 @@ jobs:
             ~/.buildozer
             mobile/.buildozer
           key: buildozer-${{ hashFiles('mobile/buildozer.spec') }}
+          # bump versi mengubah hash spec — tetap pakai SDK/NDK lama
+          restore-keys: |
+            buildozer-
 
-      - name: Build APK debug
+      # Build RELEASE dengan keystore eksplisit (cache di atas) — debug
+      # signing gradle memakai keystore lain di dalam .buildozer yang
+      # dibuat ulang tiap build, sehingga APK tak pernah bisa install-timpa
+      - name: Build APK release (signed)
         working-directory: mobile
+        env:
+          P4A_RELEASE_KEYSTORE: /home/runner/.android/debug.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: android
+          P4A_RELEASE_KEYALIAS: androiddebugkey
+          P4A_RELEASE_KEYALIAS_PASSWD: android
         # `yes |` menjawab prompt lisensi Android SDK yang interaktif
-        run: yes | buildozer android debug
+        run: yes | buildozer android release
 
       - uses: actions/upload-artifact@v4
         with:
