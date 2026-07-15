@@ -12,18 +12,21 @@ import asyncio
 from pathlib import Path
 
 from kivy.metrics import dp
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.image import Image
 from kivy.uix.scrollview import ScrollView
 from kivymd.toast import toast
 from kivymd.uix.button import (
     MDFlatButton,
     MDFloatingActionButton,
+    MDIconButton,
     MDRaisedButton,
 )
 from kivymd.uix.card import MDCard
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDLabel
+from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.list import (
     IconLeftWidget,
     IconRightWidget,
@@ -39,6 +42,7 @@ from kivymd.uix.textfield import MDTextField
 from kivymd.uix.toolbar import MDTopAppBar
 
 import androidio
+from appmeta import __version__
 from config import settings
 from core import captions, previewer
 from core.db import FileRecord
@@ -76,6 +80,12 @@ def _icon_for(rec: FileRecord) -> str:
     return "file"
 
 
+class TapCard(ButtonBehavior, MDCard):
+    """MDCard yang bisa ditekan (on_release) — sel grid. MDCard biasa
+    tidak punya perilaku tombol; MDIconButton di dalamnya tetap memakan
+    sentuhannya sendiri, jadi tombol menu tidak ikut membuka kartu."""
+
+
 class BrowserScreen(MDScreen):
     def __init__(self, app, **kwargs):
         super().__init__(**kwargs)
@@ -83,7 +93,7 @@ class BrowserScreen(MDScreen):
         self.folder_id = None
         self.folder_stack = []  # [(id, nama)] — breadcrumb
         self.sort_mode = "name_asc"
-        self.search_open = False
+        self.view_mode = "list"  # "list" | "grid"
         self._dialog = None
         self._uploading = False
         # Satu transfer pada satu waktu — paralel ke channel yang sama
@@ -93,12 +103,19 @@ class BrowserScreen(MDScreen):
         col = BoxLayout(orientation="vertical")
 
         self.toolbar = MDTopAppBar(title="TeleDrive", elevation=0)
-        self.toolbar.right_action_items = [
-            ["magnify", lambda *_: self.toggle_search()],
-            ["sort", lambda *_: self.sort_dialog()],
-            ["refresh", lambda *_: self.app.run_task(self.sync())],
-        ]
+        self.toolbar.right_action_items = self._toolbar_actions()
         col.add_widget(self.toolbar)
+
+        # Search bar permanen tepat di bawah toolbar — SELALU terlihat.
+        # Berada di luar ScrollView, jadi tidak ikut tergulung saat scroll.
+        self.search_box = BoxLayout(
+            size_hint_y=None, height=dp(60),
+            padding=[dp(16), 0, dp(16), dp(4)],
+        )
+        self.search = MDTextField(hint_text="Cari file di semua folder…")
+        self.search.bind(text=lambda *_: self.refresh())
+        self.search_box.add_widget(self.search)
+        col.add_widget(self.search_box)
 
         self.info = MDLabel(
             text="", theme_text_color="Secondary", font_style="Caption",
@@ -106,17 +123,16 @@ class BrowserScreen(MDScreen):
         )
         col.add_widget(self.info)
 
-        self.search_box = BoxLayout(
-            size_hint_y=None, height=0, padding=[dp(16), 0, dp(16), 0]
-        )
-        self.search = MDTextField(hint_text="Cari file di semua folder…")
-        self.search.bind(text=lambda *_: self.refresh())
-        col.add_widget(self.search_box)
-
+        # List & grid berbagi satu ScrollView; kontennya ditukar saat
+        # ganti mode (MDList vs GridLayout kartu thumbnail).
         self.mdlist = MDList()
-        scroll = ScrollView()
-        scroll.add_widget(self.mdlist)
-        col.add_widget(scroll)
+        self.grid = GridLayout(
+            cols=2, spacing=dp(10), padding=dp(10), size_hint_y=None,
+        )
+        self.grid.bind(minimum_height=self.grid.setter("height"))
+        self.scroll = ScrollView()
+        self.scroll.add_widget(self.mdlist)
+        col.add_widget(self.scroll)
 
         self.panel = MDCard(
             orientation="vertical", size_hint_y=None, height=0, opacity=0,
@@ -158,9 +174,9 @@ class BrowserScreen(MDScreen):
             self.app.run_task(self.process_queue())
 
     def handle_back(self) -> bool:
-        """Tombol back Android: tutup search / naik folder."""
-        if self.search_open:
-            self.toggle_search()
+        """Tombol back Android: bersihkan pencarian / naik folder."""
+        if self.search.text:
+            self.search.text = ""  # bind text → refresh() otomatis
             return True
         if self.folder_stack:
             self.go_up()
@@ -173,15 +189,34 @@ class BrowserScreen(MDScreen):
         db = self.app.db
         if db is None:
             return
-        self.mdlist.clear_widgets()
 
-        term = self.search.text.strip() if self.search_open else ""
+        term = self.search.text.strip()
         if term:
             folders, files = [], db.search(term)
         else:
             folders = db.list_folders(self.folder_id)
             files = db.list_in_folder(self.folder_id)
         files = self._sorted([f for f in files if f.status != "deleted"])
+
+        if self.view_mode == "grid":
+            self._show_grid(folders, files)
+        else:
+            self._show_list(folders, files)
+
+        if self.folder_stack:
+            self.toolbar.left_action_items = [
+                ["arrow-left", lambda *_: self.go_up()]
+            ]
+            self.toolbar.title = self.folder_stack[-1][1]
+        else:
+            self.toolbar.left_action_items = []
+            self.toolbar.title = "TeleDrive"
+
+    def _show_list(self, folders, files):
+        if self.mdlist.parent is None:
+            self.scroll.clear_widgets()
+            self.scroll.add_widget(self.mdlist)
+        self.mdlist.clear_widgets()
 
         for f in folders:
             item = OneLineAvatarIconListItem(
@@ -219,14 +254,81 @@ class BrowserScreen(MDScreen):
             ))
             self.mdlist.add_widget(item)
 
-        if self.folder_stack:
-            self.toolbar.left_action_items = [
-                ["arrow-left", lambda *_: self.go_up()]
-            ]
-            self.toolbar.title = self.folder_stack[-1][1]
+    def _show_grid(self, folders, files):
+        if self.grid.parent is None:
+            self.scroll.clear_widgets()
+            self.scroll.add_widget(self.grid)
+        self.grid.clear_widgets()
+        for f in folders:
+            self.grid.add_widget(self._grid_folder(f))
+        for r in files:
+            self.grid.add_widget(self._grid_file(r))
+
+    def _grid_cell(self):
+        return TapCard(
+            orientation="vertical", size_hint_y=None, height=dp(168),
+            padding=dp(6), spacing=dp(2), radius=[dp(12)],
+            ripple_behavior=True,
+        )
+
+    def _grid_folder(self, folder):
+        card = self._grid_cell()
+        card.bind(on_release=lambda *_: self.enter_folder(folder))
+        card.add_widget(MDIcon(
+            icon="folder", halign="center", valign="center",
+            font_size="64sp", theme_text_color="Custom",
+            text_color=self.app.theme_cls.primary_color,
+        ))
+        card.add_widget(MDLabel(
+            text=folder.name, halign="center", shorten=True,
+            shorten_from="right", font_style="Caption",
+            size_hint_y=None, height=dp(20),
+        ))
+        row = BoxLayout(size_hint_y=None, height=dp(28))
+        row.add_widget(MDLabel(
+            text="Folder", font_style="Caption",
+            theme_text_color="Secondary",
+        ))
+        row.add_widget(MDIconButton(
+            icon="dots-vertical",
+            on_release=lambda *_: self.folder_menu(folder),
+        ))
+        card.add_widget(row)
+        return card
+
+    def _grid_file(self, r):
+        card = self._grid_cell()
+        card.bind(on_release=lambda *_: self.app.run_task(self.preview(r)))
+        tp = thumb_path(r.id)
+        if r.status == "synced" and tp.exists():
+            card.add_widget(Image(source=str(tp), fit_mode="cover"))
+        elif r.status != "synced":
+            card.add_widget(MDIcon(
+                icon="alert-circle-outline", halign="center",
+                valign="center", font_size="48sp",
+            ))
         else:
-            self.toolbar.left_action_items = []
-            self.toolbar.title = "TeleDrive"
+            card.add_widget(MDIcon(
+                icon=_icon_for(r), halign="center", valign="center",
+                font_size="48sp",
+            ))
+        card.add_widget(MDLabel(
+            text=r.original_name, halign="center", shorten=True,
+            shorten_from="right", font_style="Caption",
+            size_hint_y=None, height=dp(20),
+        ))
+        row = BoxLayout(size_hint_y=None, height=dp(28))
+        mb = (r.size_bytes or 0) / 1024**2
+        row.add_widget(MDLabel(
+            text=f"{mb:.1f} MB", font_style="Caption",
+            theme_text_color="Secondary",
+        ))
+        row.add_widget(MDIconButton(
+            icon="dots-vertical",
+            on_release=lambda *_: self.file_menu(r),
+        ))
+        card.add_widget(row)
+        return card
 
     def update_info(self):
         db = self.app.db
@@ -269,17 +371,43 @@ class BrowserScreen(MDScreen):
         )
         self.refresh()
 
-    def toggle_search(self):
-        self.search_open = not self.search_open
-        if self.search_open:
-            self.search_box.add_widget(self.search)
-            self.search_box.height = dp(64)
-            self.search.focus = True
-        else:
-            self.search.text = ""
-            self.search_box.remove_widget(self.search)
-            self.search_box.height = 0
+    def _toolbar_actions(self):
+        view_icon = (
+            "view-grid-outline" if self.view_mode == "list"
+            else "format-list-bulleted"
+        )
+        return [
+            [view_icon, lambda *_: self.toggle_view()],
+            ["sort", lambda *_: self.sort_dialog()],
+            ["refresh", lambda *_: self.app.run_task(self.sync())],
+            ["dots-vertical", lambda *_: self.overflow_menu()],
+        ]
+
+    def toggle_view(self):
+        self.view_mode = "grid" if self.view_mode == "list" else "list"
+        self.toolbar.right_action_items = self._toolbar_actions()
         self.refresh()
+
+    def overflow_menu(self):
+        self._menu("TeleDrive", [
+            ("information-outline", "Tentang", self.about_dialog),
+        ])
+
+    def about_dialog(self):
+        version = androidio.app_version() or __version__
+        self._dialog = MDDialog(
+            title="TeleDrive",
+            text=(
+                f"Versi terpasang: {version}\n"
+                "Paket: com.s4rt4.teledrive\n\n"
+                "Penyimpanan pribadi Anda di Telegram."
+            ),
+            buttons=[MDFlatButton(
+                text="TUTUP",
+                on_release=lambda *_: self._dialog.dismiss(),
+            )],
+        )
+        self._dialog.open()
 
     def sort_dialog(self):
         self._menu("Urutkan", [

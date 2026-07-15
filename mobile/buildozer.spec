@@ -7,7 +7,12 @@
 title = TeleDrive
 package.name = teledrive
 package.domain = com.s4rt4
-version = 0.5
+# Versi dibaca dari appmeta.py (sumber tunggal — dialog "Tentang" di app
+# memakai konstanta yang sama, jadi tak pernah melenceng dari APK).
+# `version =` HARUS tetap dikomentari agar version.regex dipakai.
+# version = 0.6
+version.regex = __version__ = ['"]([^'"]*)['"]
+version.filename = %(source.dir)s/appmeta.py
 
 source.dir = .
 source.include_exts = py

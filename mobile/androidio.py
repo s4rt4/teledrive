@@ -178,6 +178,21 @@ def save_to_downloads(src: Path, name: str, mime: str | None):
     return str(dest), None  # file:// dilarang untuk intent sejak API 24
 
 
+def app_version() -> str | None:
+    """versionName paket terpasang via PackageManager — versi APK yang
+    BENAR-BENAR ada di perangkat (bukan konstanta build). None di desktop."""
+    if not ANDROID:
+        return None
+    try:
+        act = _activity()
+        info = act.getPackageManager().getPackageInfo(
+            act.getPackageName(), 0
+        )
+        return info.versionName
+    except Exception:
+        return None
+
+
 def view_uri(uri, mime: str | None) -> bool:
     """Buka content uri dengan app eksternal (ACTION_VIEW)."""
     if not ANDROID or uri is None:
